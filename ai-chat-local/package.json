@@ -1,0 +1,13 @@
+{
+  "name": "ai-chat-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local AI chat proxy and UI",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

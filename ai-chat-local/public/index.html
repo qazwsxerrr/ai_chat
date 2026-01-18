@@ -7,7 +7,17 @@
   <style>
     :root { color-scheme: light dark; }
     body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .app { height: 100vh; display:flex; flex-direction:column; }
+    .app { height: 100vh; display:flex; }
+    .sidebar { width:260px; border-right:1px solid rgba(127,127,127,.25); display:flex; flex-direction:column; }
+    .sidebar-header { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid rgba(127,127,127,.25); }
+    .sidebar-list { flex:1; overflow:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+    .session-item { display:flex; flex-direction:column; gap:6px; padding:10px; border-radius:12px; border:1px solid rgba(127,127,127,.25); cursor:pointer; }
+    .session-item.active { border-color: rgba(91,114,255,.7); box-shadow: 0 0 0 1px rgba(91,114,255,.35) inset; }
+    .session-title { font-weight:600; }
+    .session-meta { font-size:12px; opacity:.7; display:flex; justify-content:space-between; }
+    .session-actions { display:flex; gap:6px; }
+    .session-actions button { padding:4px 8px; font-size:12px; }
+    .main { flex:1; display:flex; flex-direction:column; }
     .topbar { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid rgba(127,127,127,.25); }
     .topbar .title { font-weight:700; }
     .topbar .spacer { flex:1; }
@@ -15,10 +25,13 @@
     button:disabled { opacity:.5; cursor:not-allowed; }
     .pill { font-size:12px; padding:3px 8px; border-radius:999px; border:1px solid rgba(127,127,127,.35); }
     .messages { flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
-    .msg { max-width: 920px; padding:10px 12px; border-radius:14px; border:1px solid rgba(127,127,127,.25); white-space:pre-wrap; word-break:break-word; }
+    .msg { max-width: 920px; padding:10px 12px; border-radius:14px; border:1px solid rgba(127,127,127,.25); word-break:break-word; }
     .msg.user { align-self:flex-end; }
     .msg.assistant { align-self:flex-start; }
     .msg .meta { font-size:12px; opacity:.7; margin-bottom:6px; }
+    .msg .body :is(p, ul, ol, pre) { margin:0 0 8px; }
+    .msg .body :is(pre) { padding:10px; border-radius:10px; background: rgba(127,127,127,.1); overflow:auto; }
+    .msg .body code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .composer { display:flex; gap:8px; padding:12px; border-top:1px solid rgba(127,127,127,.25); }
     textarea { flex:1; resize:none; height: 42px; max-height: 180px; padding:10px 12px; border-radius:12px; border:1px solid rgba(127,127,127,.35); background:transparent; }
     .hint { font-size:12px; opacity:.7; padding:0 12px 12px; }
@@ -32,26 +45,41 @@
     input, select { padding:10px 12px; border-radius:12px; border:1px solid rgba(127,127,127,.35); background:transparent; }
     .row { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; }
     .warn { font-size:12px; opacity:.8; margin-top:8px; }
+    @media (max-width: 860px) {
+      .sidebar { display:none; }
+      .app { flex-direction:column; }
+    }
   </style>
 </head>
 <body>
 <div class="app">
-  <div class="topbar">
-    <div class="title">AI Chat（本地自用）</div>
-    <span id="statusPill" class="pill">未配置</span>
-    <div class="spacer"></div>
-    <button id="btnConfig">配置</button>
-    <button id="btnClear">清空对话</button>
-  </div>
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <strong>会话</strong>
+      <div class="spacer"></div>
+      <button id="btnNewSession">新建</button>
+    </div>
+    <div id="sessionList" class="sidebar-list"></div>
+  </aside>
 
-  <div id="messages" class="messages"></div>
+  <main class="main">
+    <div class="topbar">
+      <div class="title">AI Chat（本地自用）</div>
+      <span id="statusPill" class="pill">未配置</span>
+      <div class="spacer"></div>
+      <button id="btnConfig">配置</button>
+      <button id="btnClear">清空对话</button>
+    </div>
 
-  <div class="composer">
-    <textarea id="input" placeholder="输入消息，回车发送（Shift+Enter换行）"></textarea>
-    <button id="btnSend">发送</button>
-    <button id="btnStop" disabled>停止</button>
-  </div>
-  <div class="hint">说明：此页面请求会先打到本机 /api，再由本机转发到你填写的 OpenAI 兼容接口（更不容易跨域）。</div>
+    <div id="messages" class="messages"></div>
+
+    <div class="composer">
+      <textarea id="input" placeholder="输入消息，回车发送（Shift+Enter换行）"></textarea>
+      <button id="btnSend">发送</button>
+      <button id="btnStop" disabled>停止</button>
+    </div>
+    <div class="hint">说明：此页面请求会先打到本机 /api，再由本机转发到你填写的 OpenAI 兼容接口（更不容易跨域）。</div>
+  </main>
 </div>
 
 <div id="modalBackdrop" class="modal-backdrop">
@@ -65,6 +93,10 @@
       <div class="field">
         <label>API Key（仅保存在本机浏览器 localStorage）</label>
         <input id="cfgApiKey" type="password" placeholder="sk-..." />
+      </div>
+      <div class="field">
+        <label>系统提示词（System Prompt）</label>
+        <input id="cfgSystemPrompt" placeholder="你是一个耐心的中文助手..." />
       </div>
       <div class="field">
         <label>Model（可手动输入或从 /v1/models 拉取）</label>
@@ -89,6 +121,12 @@
           <button id="btnLoadModels">拉取模型</button>
         </div>
       </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>最近使用的模型</label>
+        <select id="cfgModelHistory">
+          <option value="">（暂无记录）</option>
+        </select>
+      </div>
     </div>
 
     <div class="warn">本地自用 OK；如果要公开部署，建议不要在浏览器保存 Key，改为后端环境变量。</div>
@@ -101,8 +139,11 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
   const LS_KEY = "ai_chat_local_proxy_config_v1";
+  const LS_SESSIONS = "ai_chat_local_sessions_v1";
+  const LS_USED_MODELS = "ai_chat_local_used_models_v1";
 
   const els = {
     messages: document.getElementById("messages"),
@@ -115,34 +156,42 @@
     modalBackdrop: document.getElementById("modalBackdrop"),
     cfgBaseUrl: document.getElementById("cfgBaseUrl"),
     cfgApiKey: document.getElementById("cfgApiKey"),
+    cfgSystemPrompt: document.getElementById("cfgSystemPrompt"),
     cfgModel: document.getElementById("cfgModel"),
     cfgTemp: document.getElementById("cfgTemp"),
     cfgMaxTokens: document.getElementById("cfgMaxTokens"),
     cfgModelSelect: document.getElementById("cfgModelSelect"),
+    cfgModelHistory: document.getElementById("cfgModelHistory"),
     btnLoadModels: document.getElementById("btnLoadModels"),
     btnTest: document.getElementById("btnTest"),
     btnSave: document.getElementById("btnSave"),
     btnClose: document.getElementById("btnClose"),
+    sessionList: document.getElementById("sessionList"),
+    btnNewSession: document.getElementById("btnNewSession"),
   };
 
   let config = loadConfig();
-  let messages = [];
+  let sessions = loadSessions();
+  let activeSessionId = sessions[0]?.id || null;
+  let messages = getActiveMessages();
   let abortController = null;
+  let usedModels = loadUsedModels();
 
   function loadConfig() {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return { baseUrl:"", apiKey:"", model:"", temperature:0.7, maxTokens:"" };
+      if (!raw) return { baseUrl:"", apiKey:"", model:"", systemPrompt:"", temperature:0.7, maxTokens:"" };
       const p = JSON.parse(raw);
       return {
         baseUrl: p.baseUrl ?? "",
         apiKey: p.apiKey ?? "",
         model: p.model ?? "",
+        systemPrompt: p.systemPrompt ?? "",
         temperature: (p.temperature ?? 0.7),
         maxTokens: (p.maxTokens ?? "")
       };
     } catch {
-      return { baseUrl:"", apiKey:"", model:"", temperature:0.7, maxTokens:"" };
+      return { baseUrl:"", apiKey:"", model:"", systemPrompt:"", temperature:0.7, maxTokens:"" };
     }
   }
 
@@ -150,6 +199,7 @@
     config = next;
     localStorage.setItem(LS_KEY, JSON.stringify(config));
     updateStatus();
+    addUsedModel(config.model);
   }
 
   function updateStatus() {
@@ -160,9 +210,11 @@
   function openModal() {
     els.cfgBaseUrl.value = config.baseUrl || "";
     els.cfgApiKey.value = config.apiKey || "";
+    els.cfgSystemPrompt.value = config.systemPrompt || "";
     els.cfgModel.value = config.model || "";
     els.cfgTemp.value = String(config.temperature ?? 0.7);
     els.cfgMaxTokens.value = String(config.maxTokens ?? "");
+    renderUsedModels();
     els.modalBackdrop.style.display = "flex";
   }
 
@@ -173,6 +225,7 @@
   function addMessage(role, content) {
     const msg = { role, content: content ?? "" };
     messages.push(msg);
+    persistSession();
     renderMessages();
     scrollToBottom();
     return msg;
@@ -187,7 +240,12 @@
       meta.className = "meta";
       meta.textContent = m.role === "user" ? "你" : "AI";
       const body = document.createElement("div");
-      body.textContent = m.content || "";
+      body.className = "body";
+      if (m.role === "assistant") {
+        body.innerHTML = window.marked ? marked.parse(m.content || "") : (m.content || "");
+      } else {
+        body.textContent = m.content || "";
+      }
       div.appendChild(meta);
       div.appendChild(body);
       els.messages.appendChild(div);
@@ -206,6 +264,137 @@
 
   function normalizeBaseUrl(input) {
     return (input || "").trim().replace(/\/+$/, "");
+  }
+
+  function loadSessions() {
+    try {
+      const raw = localStorage.getItem(LS_SESSIONS);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveSessions(next) {
+    sessions = next;
+    localStorage.setItem(LS_SESSIONS, JSON.stringify(sessions));
+  }
+
+  function getActiveMessages() {
+    const session = sessions.find(s => s.id === activeSessionId);
+    return session?.messages || [];
+  }
+
+  function setActiveSession(id) {
+    activeSessionId = id;
+    messages = getActiveMessages();
+    renderMessages();
+    renderSessionList();
+  }
+
+  function createSession() {
+    const id = crypto.randomUUID();
+    const session = {
+      id,
+      title: "新会话",
+      updatedAt: Date.now(),
+      messages: []
+    };
+    saveSessions([session, ...sessions]);
+    setActiveSession(id);
+  }
+
+  function deleteSession(id) {
+    const next = sessions.filter(s => s.id !== id);
+    saveSessions(next);
+    if (activeSessionId === id) {
+      activeSessionId = next[0]?.id || null;
+      messages = getActiveMessages();
+    }
+    renderSessionList();
+    renderMessages();
+  }
+
+  function persistSession() {
+    if (!activeSessionId) return;
+    const next = sessions.map(s => {
+      if (s.id !== activeSessionId) return s;
+      const title = messages.find(m => m.role === "user")?.content?.slice(0, 24) || "新会话";
+      return { ...s, title, updatedAt: Date.now(), messages: [...messages] };
+    });
+    saveSessions(next);
+    renderSessionList();
+  }
+
+  function renderSessionList() {
+    els.sessionList.innerHTML = "";
+    if (!sessions.length) {
+      const empty = document.createElement("div");
+      empty.className = "warn";
+      empty.textContent = "暂无会话，点击“新建”创建。";
+      els.sessionList.appendChild(empty);
+      return;
+    }
+    sessions.forEach(session => {
+      const item = document.createElement("div");
+      item.className = "session-item" + (session.id === activeSessionId ? " active" : "");
+      item.addEventListener("click", () => setActiveSession(session.id));
+
+      const title = document.createElement("div");
+      title.className = "session-title";
+      title.textContent = session.title || "新会话";
+
+      const meta = document.createElement("div");
+      meta.className = "session-meta";
+      const updated = new Date(session.updatedAt || Date.now());
+      meta.textContent = updated.toLocaleString();
+
+      const actions = document.createElement("div");
+      actions.className = "session-actions";
+      const btnDelete = document.createElement("button");
+      btnDelete.textContent = "删除";
+      btnDelete.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteSession(session.id);
+      });
+      actions.appendChild(btnDelete);
+
+      item.appendChild(title);
+      item.appendChild(meta);
+      item.appendChild(actions);
+      els.sessionList.appendChild(item);
+    });
+  }
+
+  function loadUsedModels() {
+    try {
+      const raw = localStorage.getItem(LS_USED_MODELS);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function addUsedModel(model) {
+    const trimmed = (model || "").trim();
+    if (!trimmed) return;
+    usedModels = [trimmed, ...usedModels.filter(m => m !== trimmed)].slice(0, 12);
+    localStorage.setItem(LS_USED_MODELS, JSON.stringify(usedModels));
+    renderUsedModels();
+  }
+
+  function renderUsedModels() {
+    els.cfgModelHistory.innerHTML = "";
+    if (!usedModels.length) {
+      els.cfgModelHistory.innerHTML = `<option value="">（暂无记录）</option>`;
+      return;
+    }
+    els.cfgModelHistory.innerHTML = `<option value="">（选择一个）</option>` + usedModels
+      .map(m => `<option value="${m}">${m}</option>`).join("");
   }
 
   async function proxyFetchModels(baseUrl, apiKey) {
@@ -262,7 +451,10 @@
 
     const payload = {
       model: config.model,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      messages: [
+        ...(config.systemPrompt ? [{ role: "system", content: config.systemPrompt }] : []),
+        ...messages.map(m => ({ role: m.role, content: m.content }))
+      ],
       temperature: Number(config.temperature ?? 0.7),
       stream: true
     };
@@ -289,6 +481,7 @@
         const data = await res.json();
         const text = data?.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2);
         assistantMsg.content += text;
+        persistSession();
         renderMessages(); scrollToBottom();
         return;
       }
@@ -322,6 +515,7 @@
             const delta = json?.choices?.[0]?.delta?.content;
             if (typeof delta === "string" && delta.length) {
               assistantMsg.content += delta;
+              persistSession();
               renderMessages();
               scrollToBottom();
             }
@@ -330,6 +524,7 @@
       }
     } catch (e) {
       assistantMsg.content += `\n\n[错误] ${String(e?.message || e)}`;
+      persistSession();
       renderMessages(); scrollToBottom();
     } finally {
       setBusy(false);
@@ -345,7 +540,8 @@
     const next = {
       baseUrl: normalizeBaseUrl(els.cfgBaseUrl.value),
       apiKey: els.cfgApiKey.value.trim(),
-      model: (els.cfgModel.value || els.cfgModelSelect.value || "").trim(),
+      systemPrompt: els.cfgSystemPrompt.value.trim(),
+      model: (els.cfgModel.value || els.cfgModelSelect.value || els.cfgModelHistory.value || "").trim(),
       temperature: Number(els.cfgTemp.value || 0.7),
       maxTokens: (els.cfgMaxTokens.value || "").trim()
     };
@@ -376,11 +572,17 @@
     if (v) els.cfgModel.value = v;
   });
 
+  els.cfgModelHistory.addEventListener("change", () => {
+    const v = els.cfgModelHistory.value;
+    if (v) els.cfgModel.value = v;
+  });
+
   els.btnTest.addEventListener("click", async () => {
     const temp = {
       baseUrl: normalizeBaseUrl(els.cfgBaseUrl.value),
       apiKey: els.cfgApiKey.value.trim(),
-      model: (els.cfgModel.value || els.cfgModelSelect.value || "").trim(),
+      systemPrompt: els.cfgSystemPrompt.value.trim(),
+      model: (els.cfgModel.value || els.cfgModelSelect.value || els.cfgModelHistory.value || "").trim(),
       temperature: Number(els.cfgTemp.value || 0.7),
       maxTokens: (els.cfgMaxTokens.value || "").trim()
     };
@@ -391,7 +593,12 @@
 
   els.btnClear.addEventListener("click", () => {
     messages = [];
+    persistSession();
     renderMessages();
+  });
+
+  els.btnNewSession.addEventListener("click", () => {
+    createSession();
   });
 
   els.btnSend.addEventListener("click", () => {
@@ -413,7 +620,9 @@
   });
 
   // Init
+  if (!sessions.length) createSession();
   updateStatus();
+  renderSessionList();
   renderMessages();
   if (!(config.baseUrl && config.apiKey && config.model)) openModal();
 </script>
