@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Chat (OpenAI Compatible Local)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .app { height: 100vh; display:flex; flex-direction:column; }
+    .topbar { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid rgba(127,127,127,.25); }
+    .topbar .title { font-weight:700; }
+    .topbar .spacer { flex:1; }
+    button { cursor:pointer; padding:8px 10px; border-radius:10px; border:1px solid rgba(127,127,127,.35); background:transparent; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .pill { font-size:12px; padding:3px 8px; border-radius:999px; border:1px solid rgba(127,127,127,.35); }
+    .messages { flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+    .msg { max-width: 920px; padding:10px 12px; border-radius:14px; border:1px solid rgba(127,127,127,.25); white-space:pre-wrap; word-break:break-word; }
+    .msg.user { align-self:flex-end; }
+    .msg.assistant { align-self:flex-start; }
+    .msg .meta { font-size:12px; opacity:.7; margin-bottom:6px; }
+    .composer { display:flex; gap:8px; padding:12px; border-top:1px solid rgba(127,127,127,.25); }
+    textarea { flex:1; resize:none; height: 42px; max-height: 180px; padding:10px 12px; border-radius:12px; border:1px solid rgba(127,127,127,.35); background:transparent; }
+    .hint { font-size:12px; opacity:.7; padding:0 12px 12px; }
+
+    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:center; justify-content:center; padding:16px; }
+    .modal { width:min(720px, 100%); border-radius:16px; border:1px solid rgba(127,127,127,.35); background: Canvas; padding:14px; }
+    .modal h2 { margin:0 0 10px; font-size:18px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .field { display:flex; flex-direction:column; gap:6px; }
+    label { font-size:12px; opacity:.75; }
+    input, select { padding:10px 12px; border-radius:12px; border:1px solid rgba(127,127,127,.35); background:transparent; }
+    .row { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; }
+    .warn { font-size:12px; opacity:.8; margin-top:8px; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="title">AI Chat（本地自用）</div>
+    <span id="statusPill" class="pill">未配置</span>
+    <div class="spacer"></div>
+    <button id="btnConfig">配置</button>
+    <button id="btnClear">清空对话</button>
+  </div>
+
+  <div id="messages" class="messages"></div>
+
+  <div class="composer">
+    <textarea id="input" placeholder="输入消息，回车发送（Shift+Enter换行）"></textarea>
+    <button id="btnSend">发送</button>
+    <button id="btnStop" disabled>停止</button>
+  </div>
+  <div class="hint">说明：此页面请求会先打到本机 /api，再由本机转发到你填写的 OpenAI 兼容接口（更不容易跨域）。</div>
+</div>
+
+<div id="modalBackdrop" class="modal-backdrop">
+  <div class="modal">
+    <h2>连接配置（OpenAI 兼容）</h2>
+    <div class="grid">
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>模型调用地址 Base URL（例：https://api.openai.com 或 https://你的域名）</label>
+        <input id="cfgBaseUrl" placeholder="https://api.openai.com" />
+      </div>
+      <div class="field">
+        <label>API Key（仅保存在本机浏览器 localStorage）</label>
+        <input id="cfgApiKey" type="password" placeholder="sk-..." />
+      </div>
+      <div class="field">
+        <label>Model（可手动输入或从 /v1/models 拉取）</label>
+        <input id="cfgModel" placeholder="gpt-4o-mini / qwen2.5 / ..." />
+      </div>
+
+      <div class="field">
+        <label>Temperature</label>
+        <input id="cfgTemp" type="number" step="0.1" min="0" max="2" placeholder="0.7"/>
+      </div>
+      <div class="field">
+        <label>Max tokens（可留空）</label>
+        <input id="cfgMaxTokens" type="number" step="1" min="1" placeholder="(可选)"/>
+      </div>
+
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>快速选择模型（从 /v1/models 拉取）</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="cfgModelSelect" style="flex:1;">
+            <option value="">（未加载）</option>
+          </select>
+          <button id="btnLoadModels">拉取模型</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="warn">本地自用 OK；如果要公开部署，建议不要在浏览器保存 Key，改为后端环境变量。</div>
+
+    <div class="row">
+      <button id="btnTest">测试连接</button>
+      <button id="btnSave">保存</button>
+      <button id="btnClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const LS_KEY = "ai_chat_local_proxy_config_v1";
+
+  const els = {
+    messages: document.getElementById("messages"),
+    input: document.getElementById("input"),
+    btnSend: document.getElementById("btnSend"),
+    btnStop: document.getElementById("btnStop"),
+    btnClear: document.getElementById("btnClear"),
+    btnConfig: document.getElementById("btnConfig"),
+    statusPill: document.getElementById("statusPill"),
+    modalBackdrop: document.getElementById("modalBackdrop"),
+    cfgBaseUrl: document.getElementById("cfgBaseUrl"),
+    cfgApiKey: document.getElementById("cfgApiKey"),
+    cfgModel: document.getElementById("cfgModel"),
+    cfgTemp: document.getElementById("cfgTemp"),
+    cfgMaxTokens: document.getElementById("cfgMaxTokens"),
+    cfgModelSelect: document.getElementById("cfgModelSelect"),
+    btnLoadModels: document.getElementById("btnLoadModels"),
+    btnTest: document.getElementById("btnTest"),
+    btnSave: document.getElementById("btnSave"),
+    btnClose: document.getElementById("btnClose"),
+  };
+
+  let config = loadConfig();
+  let messages = [];
+  let abortController = null;
+
+  function loadConfig() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return { baseUrl:"", apiKey:"", model:"", temperature:0.7, maxTokens:"" };
+      const p = JSON.parse(raw);
+      return {
+        baseUrl: p.baseUrl ?? "",
+        apiKey: p.apiKey ?? "",
+        model: p.model ?? "",
+        temperature: (p.temperature ?? 0.7),
+        maxTokens: (p.maxTokens ?? "")
+      };
+    } catch {
+      return { baseUrl:"", apiKey:"", model:"", temperature:0.7, maxTokens:"" };
+    }
+  }
+
+  function saveConfig(next) {
+    config = next;
+    localStorage.setItem(LS_KEY, JSON.stringify(config));
+    updateStatus();
+  }
+
+  function updateStatus() {
+    const ok = !!(config.baseUrl && config.apiKey && config.model);
+    els.statusPill.textContent = ok ? `已配置：${config.model}` : "未配置";
+  }
+
+  function openModal() {
+    els.cfgBaseUrl.value = config.baseUrl || "";
+    els.cfgApiKey.value = config.apiKey || "";
+    els.cfgModel.value = config.model || "";
+    els.cfgTemp.value = String(config.temperature ?? 0.7);
+    els.cfgMaxTokens.value = String(config.maxTokens ?? "");
+    els.modalBackdrop.style.display = "flex";
+  }
+
+  function closeModal() {
+    els.modalBackdrop.style.display = "none";
+  }
+
+  function addMessage(role, content) {
+    const msg = { role, content: content ?? "" };
+    messages.push(msg);
+    renderMessages();
+    scrollToBottom();
+    return msg;
+  }
+
+  function renderMessages() {
+    els.messages.innerHTML = "";
+    for (const m of messages) {
+      const div = document.createElement("div");
+      div.className = "msg " + (m.role === "user" ? "user" : "assistant");
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = m.role === "user" ? "你" : "AI";
+      const body = document.createElement("div");
+      body.textContent = m.content || "";
+      div.appendChild(meta);
+      div.appendChild(body);
+      els.messages.appendChild(div);
+    }
+  }
+
+  function scrollToBottom() {
+    els.messages.scrollTop = els.messages.scrollHeight;
+  }
+
+  function setBusy(isBusy) {
+    els.btnSend.disabled = isBusy;
+    els.btnStop.disabled = !isBusy;
+    els.input.disabled = isBusy;
+  }
+
+  function normalizeBaseUrl(input) {
+    return (input || "").trim().replace(/\/+$/, "");
+  }
+
+  async function proxyFetchModels(baseUrl, apiKey) {
+    const url = `/api/models?baseUrl=${encodeURIComponent(baseUrl)}`;
+    const res = await fetch(url, { headers: { "x-api-key": apiKey } });
+    const text = await res.text().catch(()=>"");
+    if (!res.ok) throw new Error(`拉取模型失败：HTTP ${res.status} ${text}`);
+
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`返回不是 JSON：${text.slice(0,200)}`); }
+    const list = (data.data || []).map(x => x.id).filter(Boolean).sort();
+    return list;
+  }
+
+  async function testConnection() {
+    try {
+      const list = await proxyFetchModels(config.baseUrl, config.apiKey);
+      return { ok:true, detail:`/v1/models OK（${list.length} 个模型）` };
+    } catch (e) {
+      // 有些兼容实现没有 models，试试 chat
+      try {
+        const payload = {
+          model: config.model,
+          messages: [{ role:"user", content:"ping" }],
+          temperature: 0,
+          max_tokens: 5,
+          stream: false
+        };
+        const res = await fetch("/api/chat", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ baseUrl: config.baseUrl, apiKey: config.apiKey, payload })
+        });
+        const txt = await res.text().catch(()=>"");
+        if (!res.ok) return { ok:false, detail:`测试失败：HTTP ${res.status} ${txt}` };
+        return { ok:true, detail:"/v1/chat/completions OK" };
+      } catch (e2) {
+        return { ok:false, detail:String(e2?.message || e2) };
+      }
+    }
+  }
+
+  async function sendChat(userText) {
+    if (!config.baseUrl || !config.apiKey || !config.model) {
+      openModal();
+      return;
+    }
+
+    addMessage("user", userText);
+    const assistantMsg = addMessage("assistant", "");
+    setBusy(true);
+
+    abortController = new AbortController();
+
+    const payload = {
+      model: config.model,
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      temperature: Number(config.temperature ?? 0.7),
+      stream: true
+    };
+    const maxTokens = String(config.maxTokens ?? "").trim();
+    if (maxTokens) payload.max_tokens = Number(maxTokens);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ baseUrl: config.baseUrl, apiKey: config.apiKey, payload }),
+        signal: abortController.signal
+      });
+
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+      if (!res.ok) {
+        const t = await res.text().catch(()=>"");
+        throw new Error(`请求失败：HTTP ${res.status} ${t}`);
+      }
+
+      // 如果是 JSON（非流式），直接解析
+      if (ct.includes("application/json")) {
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2);
+        assistantMsg.content += text;
+        renderMessages(); scrollToBottom();
+        return;
+      }
+
+      // 否则按 SSE 流式解析（OpenAI 风格：data: {...}\n\n / data: [DONE]）
+      if (!res.body) throw new Error("无响应体（stream 失败）");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const part of parts) {
+          const lines = part.split("\n").map(l => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (data === "[DONE]") continue;
+
+            let json;
+            try { json = JSON.parse(data); } catch { continue; }
+
+            const delta = json?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length) {
+              assistantMsg.content += delta;
+              renderMessages();
+              scrollToBottom();
+            }
+          }
+        }
+      }
+    } catch (e) {
+      assistantMsg.content += `\n\n[错误] ${String(e?.message || e)}`;
+      renderMessages(); scrollToBottom();
+    } finally {
+      setBusy(false);
+      abortController = null;
+    }
+  }
+
+  // Events
+  els.btnConfig.addEventListener("click", openModal);
+  els.btnClose.addEventListener("click", closeModal);
+
+  els.btnSave.addEventListener("click", () => {
+    const next = {
+      baseUrl: normalizeBaseUrl(els.cfgBaseUrl.value),
+      apiKey: els.cfgApiKey.value.trim(),
+      model: (els.cfgModel.value || els.cfgModelSelect.value || "").trim(),
+      temperature: Number(els.cfgTemp.value || 0.7),
+      maxTokens: (els.cfgMaxTokens.value || "").trim()
+    };
+    saveConfig(next);
+    closeModal();
+  });
+
+  els.btnLoadModels.addEventListener("click", async () => {
+    const baseUrl = normalizeBaseUrl(els.cfgBaseUrl.value);
+    const apiKey = els.cfgApiKey.value.trim();
+    els.btnLoadModels.disabled = true;
+    els.btnLoadModels.textContent = "拉取中...";
+    try {
+      const list = await proxyFetchModels(baseUrl, apiKey);
+      els.cfgModelSelect.innerHTML = `<option value="">（请选择）</option>` + list.map(id => `<option value="${id}">${id}</option>`).join("");
+      if (list.length && !els.cfgModel.value.trim()) els.cfgModel.value = list[0];
+      alert(`拉取成功：${list.length} 个模型`);
+    } catch (e) {
+      alert(String(e?.message || e));
+    } finally {
+      els.btnLoadModels.disabled = false;
+      els.btnLoadModels.textContent = "拉取模型";
+    }
+  });
+
+  els.cfgModelSelect.addEventListener("change", () => {
+    const v = els.cfgModelSelect.value;
+    if (v) els.cfgModel.value = v;
+  });
+
+  els.btnTest.addEventListener("click", async () => {
+    const temp = {
+      baseUrl: normalizeBaseUrl(els.cfgBaseUrl.value),
+      apiKey: els.cfgApiKey.value.trim(),
+      model: (els.cfgModel.value || els.cfgModelSelect.value || "").trim(),
+      temperature: Number(els.cfgTemp.value || 0.7),
+      maxTokens: (els.cfgMaxTokens.value || "").trim()
+    };
+    config = temp;
+    const r = await testConnection();
+    alert((r.ok ? "✅ " : "❌ ") + r.detail);
+  });
+
+  els.btnClear.addEventListener("click", () => {
+    messages = [];
+    renderMessages();
+  });
+
+  els.btnSend.addEventListener("click", () => {
+    const text = els.input.value.trim();
+    if (!text) return;
+    els.input.value = "";
+    sendChat(text);
+  });
+
+  els.btnStop.addEventListener("click", () => {
+    if (abortController) abortController.abort();
+  });
+
+  els.input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      els.btnSend.click();
+    }
+  });
+
+  // Init
+  updateStatus();
+  renderMessages();
+  if (!(config.baseUrl && config.apiKey && config.model)) openModal();
+</script>
+</body>
+</html>
